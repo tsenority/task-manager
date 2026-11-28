@@ -1,9 +1,11 @@
 package com.taskmanager.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -103,6 +105,104 @@ class TaskControllerTest {
     }
 
     @Test
+    void createTaskAllowsMaximumFieldLengths() throws Exception {
+        when(taskService.createTask(eq(1L), any(Task.class))).thenReturn(task(10L));
+
+        mockMvc.perform(post("/api/users/1/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"%s","description":"%s"}
+                                """.formatted("t".repeat(100), "d".repeat(500))))
+                .andExpect(status().isCreated());
+
+        verify(taskService).createTask(eq(1L), any(Task.class));
+    }
+
+    @Test
+    void createTaskAllowsOmittedOptionalFieldsAndPreservesCreateDefaults() throws Exception {
+        when(taskService.createTask(eq(1L), any(Task.class))).thenReturn(task(10L));
+
+        mockMvc.perform(post("/api/users/1/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Optional fields\"}"))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<Task> taskCaptor = ArgumentCaptor.forClass(Task.class);
+        verify(taskService).createTask(eq(1L), taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getDescription()).isNull();
+        assertThat(taskCaptor.getValue().getDueDate()).isNull();
+        assertThat(taskCaptor.getValue().getStatus()).isNull();
+        assertThat(taskCaptor.getValue().getPriority()).isNull();
+    }
+
+    @Test
+    void blankOrMissingTitleIsRejectedBeforeCallingService() throws Exception {
+        for (String requestBody : List.of(
+                "{\"title\":null}",
+                "{\"title\":\"\"}",
+                "{\"title\":\"   \"}")) {
+            mockMvc.perform(post("/api/users/1/tasks")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(requestBody))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.fieldErrors[*].field").value(containsInAnyOrder("title")))
+                    .andExpect(jsonPath("$.fieldErrors[0].message").value("Title must not be blank."));
+        }
+
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void oversizedTitleAndDescriptionAreRejectedWithoutEchoingSubmittedValues() throws Exception {
+        String title = "t".repeat(101);
+        String description = "d".repeat(501);
+        MvcResult result = mockMvc.perform(post("/api/users/1/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"%s","description":"%s"}
+                                """.formatted(title, description)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[*].field")
+                        .value(containsInAnyOrder("title", "description")))
+                .andExpect(jsonPath("$.fieldErrors[*].message").isArray())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain(title)
+                .doesNotContain(description);
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void invalidEnumValueIsRejectedBeforeCallingService() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/users/1/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Valid title\",\"status\":\"NOT_A_STATUS\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid request body"))
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(jsonPath("$.fieldErrors").isEmpty())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("NOT_A_STATUS");
+
+        mockMvc.perform(put("/api/users/1/tasks/10")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title": "Valid title",
+                                  "status": "NOT_A_STATUS",
+                                  "priority": "HIGH"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid request body"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
     void getTaskReturnsTheRequestedTaskWithoutUserData() throws Exception {
         when(taskService.getTask(1L, 10L)).thenReturn(task(10L));
 
@@ -176,7 +276,8 @@ class TaskControllerTest {
         mockMvc.perform(get("/api/users/99/tasks"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404))
-                .andExpect(jsonPath("$.detail").value("User not found: 99"));
+                .andExpect(jsonPath("$.detail").value("User not found: 99"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
     }
 
     @Test
@@ -186,26 +287,27 @@ class TaskControllerTest {
         mockMvc.perform(get("/api/users/1/tasks/99"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404))
-                .andExpect(jsonPath("$.detail").value("Task not found: 99"));
+                .andExpect(jsonPath("$.detail").value("Task not found: 99"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
     }
 
     @Test
     void invalidUpdateReturnsBadRequest() throws Exception {
-        when(taskService.updateTask(eq(1L), eq(10L), any(Task.class)))
-                .thenThrow(new IllegalArgumentException("Task status is required for update"));
-
         mockMvc.perform(put("/api/users/1/tasks/10")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "title": "Updated task",
-                                  "description": "Updated description",
-                                  "priority": "HIGH"
+                                  "title": "",
+                                  "description": "Updated description"
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.detail").value("Task status is required for update"));
+                .andExpect(jsonPath("$.detail").value("Request validation failed."))
+                .andExpect(jsonPath("$.fieldErrors[*].field")
+                        .value(containsInAnyOrder("title", "status", "priority")));
+
+        verifyNoInteractions(taskService);
     }
 
     @Test
@@ -215,7 +317,45 @@ class TaskControllerTest {
                         .content("{\"title\":"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.detail").value("Invalid request body"));
+                .andExpect(jsonPath("$.detail").value("Invalid request body"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+    }
+
+    @Test
+    void unexpectedServiceFailureReturnsSanitizedInternalServerError() throws Exception {
+        when(taskService.getTasks(1L)).thenThrow(new IllegalStateException("internal-secret-value"));
+
+        MvcResult result = mockMvc.perform(get("/api/users/1/tasks"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.status").value(500))
+                .andExpect(jsonPath("$.detail").value("An unexpected error occurred."))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain("internal-secret-value")
+                .doesNotContain("IllegalStateException");
+    }
+
+    @Test
+    void illegalArgumentMessageIsNotExposedToClient() throws Exception {
+        when(taskService.getTasks(1L)).thenThrow(new IllegalArgumentException("internal-validation-detail"));
+
+        MvcResult result = mockMvc.perform(get("/api/users/1/tasks"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid task request."))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain("internal-validation-detail");
+    }
+
+    @Test
+    void standardSpringMvcMethodNotAllowedStatusIsPreserved() throws Exception {
+        mockMvc.perform(post("/api/users/1/tasks/10"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.status").value(405))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
     }
 
     private Task task(Long id) {
