@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -28,6 +29,38 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler({UserNotFoundException.class, TaskNotFoundException.class})
     public ResponseEntity<Object> handleNotFound(RuntimeException exception) {
         return response(HttpStatus.NOT_FOUND, exception.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(DuplicateAccountException.class)
+    public ResponseEntity<Object> handleDuplicateAccount(DuplicateAccountException exception) {
+        String field = exception.getField();
+        String detail = "username".equals(field)
+                ? "Username is already taken."
+                : "Email is already registered.";
+        String message = "username".equals(field)
+                ? "This username is already taken."
+                : "This email is already registered.";
+        return response(
+                HttpStatus.CONFLICT,
+                detail,
+                List.of(fieldError(field, message)));
+    }
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<Object> handleInvalidCredentials() {
+        return response(HttpStatus.UNAUTHORIZED, "Invalid username or password.", List.of());
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Object> handleUnclassifiedDataIntegrityViolation(
+            DataIntegrityViolationException exception) {
+        logger.error(
+                "Unclassified database integrity failure while processing an HTTP request (exceptionType={})",
+                exception.getClass().getName());
+        return response(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "An unexpected error occurred.",
+                List.of());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

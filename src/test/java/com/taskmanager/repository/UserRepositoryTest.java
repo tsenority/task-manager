@@ -1,12 +1,14 @@
 package com.taskmanager.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.taskmanager.entity.User;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.ANY)
@@ -69,5 +71,23 @@ class UserRepositoryTest {
         // Assert
         assertThat(existingEmail).isTrue();
         assertThat(missingEmail).isFalse();
+    }
+
+    @Test
+    void databaseEnforcesUsernameUniqueness() {
+        userRepository.saveAndFlush(new User("unique-user", "first@example.com", "hash"));
+
+        assertThatThrownBy(() ->
+                        userRepository.saveAndFlush(new User("unique-user", "second@example.com", "hash")))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void databaseEnforcesEmailUniqueness() {
+        userRepository.saveAndFlush(new User("first-user", "unique@example.com", "hash"));
+
+        assertThatThrownBy(() ->
+                        userRepository.saveAndFlush(new User("second-user", "unique@example.com", "hash")))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 }
